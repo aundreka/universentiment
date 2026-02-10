@@ -170,6 +170,17 @@ def compute_confidence(text: str, overall_sentiment: dict):
         return "medium"
     return "high"
 
+def extract_overview_tldr(text: str):
+    overview = None
+    tldr = None
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    for line in lines:
+        if line.lower().startswith("overview:"):
+            overview = line.split(":", 1)[1].strip()
+        if line.lower().startswith("tl;dr:") or line.lower().startswith("tldr:"):
+            tldr = line.split(":", 1)[1].strip()
+    return overview, tldr
+
 def is_school_related(text: str) -> bool:
     if not text:
         return False
@@ -207,6 +218,8 @@ def fallback_response_with_analysis(school_name: str, question: str, note: Optio
         f"- \"The community here is what you make of it. If you join orgs, you'll find your people, but it's easy to feel lost if you don't put yourself out there.\"\n"
         f"- \"I'd say the workload is intense but manageable. Profs are a mixed bag, some are amazing, others just read from slides. Typical big university stuff.\"\n"
         f"- \"Social life is pretty centered around campus events and the local bars. It can get a bit repetitive, but it's fun for the first couple of years.\"\n\n"
+        "Overview: The sentiment is mixed, with strength in community and social life but notable workload pressure.\n"
+        "TL;DR: Expect solid community vibes with a heavier academic load.\n"
     )
     meta = {"mode": "stub", "note": note}
     
@@ -232,7 +245,10 @@ def generate_with_openrouter(school_name: str, question: str, topic: Optional[st
     prompt = (
         "You are an assistant helping students understand campus life sentiment. "
         "Respond with 3-5 short quotes (bullet points) that could plausibly represent student opinions, "
-        "but clearly avoid claiming they are from real people. Keep it concise and helpful.\n\n"
+        "but clearly avoid claiming they are from real people or real sources. Keep it concise and helpful.\n"
+        "After the bullets, include:\n"
+        "Overview: <one sentence>\n"
+        "TL;DR: <one short sentence>\n\n"
         f"School: {school_name}\n"
         f"{topic_line}{timeframe_line}"
         f"Question: {question}\n"
@@ -300,6 +316,7 @@ async def chat(body: ChatRequestBody):
         if ai_reply:
             analysis = perform_sentiment_analysis(ai_reply)
             confidence = compute_confidence(ai_reply, analysis["overall_sentiment"])
+            overview, tldr = extract_overview_tldr(ai_reply)
             payload = {
                 "reply": ai_reply,
                 "meta": {
@@ -309,7 +326,9 @@ async def chat(body: ChatRequestBody):
                     "topic": topic,
                     "freshness_days": freshness_days,
                     "prompt": question,
-                    "source_note": None
+                    "source_note": " ",
+                    "overview": overview,
+                    "tldr": tldr,
                 },
                 "analysis": analysis,
                 "confidence": confidence
@@ -324,6 +343,7 @@ async def chat(body: ChatRequestBody):
         fallback_analysis = fallback.get("analysis") or {}
         overall = fallback_analysis.get("overall_sentiment") or {}
         confidence = compute_confidence(fallback.get("reply", ""), overall) if overall else "low"
+        overview, tldr = extract_overview_tldr(fallback.get("reply", ""))
         payload = {
             "reply": fallback.get("reply"),
             "meta": {
@@ -332,7 +352,9 @@ async def chat(body: ChatRequestBody):
                 "topic": topic,
                 "freshness_days": freshness_days,
                 "prompt": question,
-                "source_note": None
+                "source_note": " ",
+                "overview": overview,
+                "tldr": tldr,
             },
             "analysis": fallback.get("analysis"),
             "confidence": confidence

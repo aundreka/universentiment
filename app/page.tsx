@@ -37,6 +37,8 @@ type MessageMeta = {
   prompt?: string;
   source_note?: string | null;
   guardrail?: boolean;
+  overview?: string | null;
+  tldr?: string | null;
 };
 
 type Message = {
@@ -117,6 +119,24 @@ const FRESHNESS_OPTIONS = [
   { label: "All time", value: 0 },
 ];
 
+const SUBREDDIT_BY_SCHOOL: Record<string, string> = {
+  ust: "r/Tomasino",
+  up: "r/peyups",
+  admu: "r/admu",
+  lpuc: "r/studentsPH",
+  dlsu: "r/dlsu",
+};
+
+const SUBREDDITS = [
+  "r/askPH",
+  "r/studentsPH",
+  "r/dlsu",
+  "r/admu",
+  "r/peyups",
+  "r/Tomasino",
+  "r/Philippines",
+];
+
 function uid() {
   return Math.random().toString(16).slice(2) + Date.now().toString(16);
 }
@@ -129,6 +149,24 @@ function buildGreeting(school: School): Message {
     analysis: undefined,
     createdAt: Date.now(),
   };
+}
+
+function hashSeed(input: string) {
+  let h = 0;
+  for (let i = 0; i < input.length; i++) {
+    h = (h * 31 + input.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h);
+}
+
+function simulatedUsername(seed: string) {
+  const adjectives = ["curious", "lucky", "quiet", "brisk", "orange", "midnight", "bright", "sly"];
+  const nouns = ["tamaraw", "sparrow", "islander", "scholar", "coffee", "atlas", "nomad", "runner"];
+  const h = hashSeed(seed);
+  const adj = adjectives[h % adjectives.length];
+  const noun = nouns[(h >> 3) % nouns.length];
+  const num = (h % 900) + 100;
+  return `u/${adj}_${noun}${num}`;
 }
 
 export default function Page() {
@@ -147,6 +185,9 @@ export default function Page() {
   const [isThinking, setIsThinking] = useState(false);
   const [selectedTopic, setSelectedTopic] = useState(TOPICS[0]);
   const [freshnessDays, setFreshnessDays] = useState(FRESHNESS_OPTIONS[1].value);
+  const [selectedSubreddit, setSelectedSubreddit] = useState(
+    SUBREDDIT_BY_SCHOOL[SCHOOLS[0].id] ?? SUBREDDITS[0]
+  );
   const [compareMode, setCompareMode] = useState(false);
   const [compareResults, setCompareResults] = useState<CompareResult[]>([]);
   const [isComparing, setIsComparing] = useState(false);
@@ -167,6 +208,10 @@ export default function Page() {
       return { ...prev, [selectedSchoolId]: [buildGreeting(selectedSchool)] };
     });
   }, [selectedSchoolId, selectedSchool]);
+
+  useEffect(() => {
+    setSelectedSubreddit(SUBREDDIT_BY_SCHOOL[selectedSchoolId] ?? SUBREDDITS[0]);
+  }, [selectedSchoolId]);
 
   const sentimentHistory = useMemo(() => {
     return sessionMessages
@@ -575,6 +620,17 @@ export default function Page() {
                   </button>
                 ))}
                 <select
+                  value={selectedSubreddit}
+                  onChange={(e) => setSelectedSubreddit(e.target.value)}
+                  className="rounded-lg border border-slate-800 bg-slate-950 px-2 py-1 text-xs text-slate-200"
+                >
+                  {SUBREDDITS.map((sub) => (
+                    <option key={sub} value={sub}>
+                      {sub}
+                    </option>
+                  ))}
+                </select>
+                <select
                   value={freshnessDays}
                   onChange={(e) => setFreshnessDays(Number(e.target.value))}
                   className="ml-auto rounded-lg border border-slate-800 bg-slate-950 px-2 py-1 text-xs text-slate-200"
@@ -597,22 +653,25 @@ export default function Page() {
                         key={m.id}
                         className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
                       >
-                        <div
-                          className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                            m.role === "user"
-                              ? "bg-slate-200 text-slate-900"
-                              : "bg-slate-950/70 text-slate-100 border border-slate-800"
-                          }`}
-                        >
-                          <MessageText text={m.content} />
-                          {m.role === "assistant" && m.analysis && (
-                            <SentimentAnalysis
-                              analysis={m.analysis}
-                              confidence={m.confidence}
-                              meta={m.meta}
-                            />
-                          )}
-                        </div>
+                        {m.role === "assistant" ? (
+                          <div className="max-w-[85%] rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3 text-sm leading-relaxed">
+                            <RedditStyleHeader subreddit={selectedSubreddit} />
+                            <div className="mt-2 text-slate-100">
+                              <RedditStyleBody text={m.content} seed={m.id} />
+                            </div>
+                            {m.analysis && (
+                              <SentimentAnalysis
+                                analysis={m.analysis}
+                                confidence={m.confidence}
+                                meta={m.meta}
+                              />
+                            )}
+                          </div>
+                        ) : (
+                          <div className="max-w-[85%] rounded-2xl bg-slate-200 px-4 py-3 text-sm leading-relaxed text-slate-900">
+                            <MessageText text={m.content} />
+                          </div>
+                        )}
                       </div>
                     ))}
 
@@ -678,8 +737,11 @@ export default function Page() {
                             </div>
                           )}
                         </div>
-                        <div className="mt-2 text-sm text-slate-200">
-                          <MessageText text={result.reply} />
+                        <div className="mt-2">
+                          <RedditStyleHeader subreddit={selectedSubreddit} />
+                          <div className="mt-2 text-sm text-slate-200">
+                            <RedditStyleBody text={result.reply} seed={result.school.id} />
+                          </div>
                         </div>
                         {result.analysis && (
                           <SentimentAnalysis
@@ -732,6 +794,21 @@ function SentimentAnalysis({
           </span>
         )}
       </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-slate-400">
+        <span>Pos {Math.round(analysis.overall_sentiment.pos * 100)}%</span>
+        <span>Neu {Math.round(analysis.overall_sentiment.neu * 100)}%</span>
+        <span>Neg {Math.round(analysis.overall_sentiment.neg * 100)}%</span>
+      </div>
+      {meta?.overview && (
+        <div className="mt-2 text-slate-300">
+          <span className="text-slate-400">Overview:</span> {meta.overview}
+        </div>
+      )}
+      {meta?.tldr && (
+        <div className="mt-2 text-slate-300">
+          <span className="text-slate-400">TL;DR:</span> {meta.tldr}
+        </div>
+      )}
       {meta?.source_note && (
         <div className="mt-2 text-slate-500">{meta.source_note}</div>
       )}
@@ -761,6 +838,49 @@ function MessageText({ text }: { text: string }) {
           <span key={idx}>{p.t}</span>
         )
       )}
+    </div>
+  );
+}
+
+function RedditStyleBody({ text, seed }: { text: string; seed: string }) {
+  const lines = (text || "").split("\n");
+  return (
+    <div className="space-y-2">
+      {lines.map((line, idx) => {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("- ")) {
+          const quote = trimmed.slice(2).trim();
+          return (
+            <div key={idx} className="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+              <div className="text-[11px] text-slate-400">
+                {simulatedUsername(`${seed}-${idx}`)}{" "}
+
+              </div>
+              <div className="mt-1 text-sm text-slate-100">{quote}</div>
+            </div>
+          );
+        }
+
+        if (!trimmed) return null;
+
+        return (
+          <div key={idx} className="text-sm text-slate-200">
+            <MessageText text={line} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function RedditStyleHeader({ subreddit }: { subreddit: string }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+      <span className="rounded-full border border-slate-700 px-2 py-0.5 text-slate-300">
+        {subreddit}
+      </span>
+
+
     </div>
   );
 }
