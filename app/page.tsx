@@ -45,19 +45,31 @@ const SCHOOLS: School[] = [
     id: "ust",
     name: "University of Santo Tomas",
     logoUrl:
-      "https://upload.wikimedia.org/wikipedia/en/thumb/7/7c/University_of_Santo_Tomas_seal.svg/256px-University_of_Santo_Tomas_seal.svg.png",
+      "ust.jpeg",
   },
   {
     id: "up",
     name: "University of the Philippines",
     logoUrl:
-      "https://upload.wikimedia.org/wikipedia/en/thumb/7/77/University_of_the_Philippines_seal.svg/256px-University_of_the_Philippines_seal.svg.png",
+      "up.png"    
   },
   {
     id: "admu",
     name: "Ateneo de Manila University",
     logoUrl:
-      "https://upload.wikimedia.org/wikipedia/en/thumb/0/08/Ateneo_de_Manila_University_seal.svg/256px-Ateneo_de_Manila_University_seal.svg.png",
+      "admu.png",
+  },
+  {
+    id: "lpuc",
+    name: "Lyceum of the Philippines University - Cavite",
+    logoUrl:
+      "lpuc.png",
+  },
+    {
+    id: "dlsu",
+    name: "De La Salle University",
+    logoUrl:
+      "dlsu.png",
   },
 ];
 
@@ -127,12 +139,18 @@ export default function Page() {
       }),
     });
 
-    const data = await res.json();
+    const raw = await res.text();
+    let data: { reply?: string; analysis?: Analysis; error?: string } = {};
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      data = { reply: raw };
+    }
 
     const assistantMsg: Message = {
       id: uid(),
       role: "assistant",
-      content: data.reply ?? "No reply returned.",
+      content: data.reply ?? data.error ?? "No reply returned.",
       analysis: data.analysis,
       createdAt: Date.now(),
     };
@@ -149,7 +167,7 @@ export default function Page() {
           <div>
             <h1 className="text-2xl font-semibold">College Guide: Student Life Sentiment</h1>
             <p className="mt-1 text-sm text-slate-300">
-              Choose a school, then chat to get a student-life sentiment summary (Reddit + AI later).
+              Choose a school, then chat to get a student-life sentiment summary.
             </p>
           </div>
 
@@ -186,9 +204,7 @@ export default function Page() {
                 </div>
                 <div>
                   <div className="text-sm font-medium">{selectedSchool.name}</div>
-                  <div className="mt-1 text-xs text-slate-400">
-                    Logo preview (replace with your own assets later)
-                  </div>
+ 
                 </div>
               </div>
 
