@@ -3,7 +3,36 @@
 import React, { useMemo, useRef, useState } from "react";
 
 type Role = "user" | "assistant";
-type Message = { id: string; role: Role; content: string; createdAt: number };
+
+type SentimentScores = {
+  compound: number;
+  label: "positive" | "negative" | "neutral";
+  pos: number;
+  neu: number;
+  neg: number;
+};
+
+type SentenceAnalysis = {
+  text: string;
+  sentiment: SentimentScores;
+};
+
+type Analysis = {
+  overall_sentiment: SentimentScores;
+  sentences: SentenceAnalysis[];
+  relevant_sentences: {
+    most_positive: SentenceAnalysis | null;
+    most_negative: SentenceAnalysis | null;
+  };
+};
+
+type Message = {
+  id: string;
+  role: Role;
+  content: string;
+  createdAt: number;
+  analysis?: Analysis;
+};
 
 type School = {
   id: string;
@@ -49,6 +78,7 @@ export default function Page() {
       role: "assistant",
       content:
         "Hi! Pick a school, then tell me what you care about (friends, orgs, workload balance, nightlife, dorm life, etc). I’ll summarize the student-life sentiment.",
+      analysis: undefined,
       createdAt: Date.now(),
     },
   ]);
@@ -103,6 +133,7 @@ export default function Page() {
       id: uid(),
       role: "assistant",
       content: data.reply ?? "No reply returned.",
+      analysis: data.analysis,
       createdAt: Date.now(),
     };
 
@@ -122,9 +153,7 @@ export default function Page() {
             </p>
           </div>
 
-          <div className="rounded-xl border border-slate-800 bg-slate-900/40 px-3 py-2 text-xs text-slate-300">
-            1-page MVP UI
-          </div>
+          
         </header>
 
         <div className="grid gap-4 md:grid-cols-[320px_1fr]">
@@ -163,13 +192,6 @@ export default function Page() {
                 </div>
               </div>
 
-              <div className="mt-4">
-                <h3 className="text-xs font-semibold text-slate-300">Tips</h3>
-                <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-400">
-                  <li>Ask about org culture, dorm/commute, workload-life balance.</li>
-                  <li>Later: we’ll pull Reddit posts and summarize themes with Gemini.</li>
-                </ul>
-              </div>
             </div>
           </aside>
 
@@ -200,6 +222,9 @@ export default function Page() {
                     >
                       {/* Simple markdown-ish bold support */}
                       <MessageText text={m.content} />
+                      {m.role === "assistant" && m.analysis && (
+                        <SentimentAnalysis analysis={m.analysis} />
+                      )}
                     </div>
                   </div>
                 ))}
@@ -232,13 +257,30 @@ export default function Page() {
                   Send
                 </button>
               </div>
-              <p className="mt-2 text-xs text-slate-500">
-                Front end only for now. Next step: make an API route that calls Reddit + Gemini.
-              </p>
             </form>
           </main>
         </div>
       </div>
+    </div>
+  );
+}
+
+function SentimentAnalysis({ analysis }: { analysis: Analysis }) {
+  if (!analysis?.overall_sentiment) return null;
+
+  const { label, compound } = analysis.overall_sentiment;
+
+  const getLabelColor = () => {
+    if (label === "positive") return "text-green-400";
+    if (label === "negative") return "text-red-400";
+    return "text-slate-400";
+  };
+
+  return (
+    <div className="mt-3 border-t border-slate-700/50 pt-3 text-xs">
+      <span className="font-semibold text-slate-400">Sentiment: </span>
+      <span className={`font-bold capitalize ${getLabelColor()}`}>{label}</span>
+      <span className="ml-2 text-slate-500">(Score: {compound.toFixed(2)})</span>
     </div>
   );
 }
