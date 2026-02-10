@@ -2,6 +2,7 @@ import os
 import requests
 import json
 import re
+import time
 from typing import List, Optional
 from fastapi import FastAPI
 import traceback
@@ -11,7 +12,6 @@ from dotenv import load_dotenv
 import nltk
 import ssl
 from pathlib import Path
-import praw
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 # Load environment variables from project root, then fallback to default behavior
@@ -61,6 +61,11 @@ class School(BaseModel):
 class ChatRequestBody(BaseModel):
     school: School
     messages: List[Message]
+    topic: Optional[str] = None
+    freshness_days: Optional[int] = None
+
+CACHE_TTL_SECONDS = 900
+SUMMARY_CACHE = {}
 
 def get_last_user_text(messages: List[Message]) -> str:
     for m in reversed(messages):
@@ -152,6 +157,50 @@ def perform_sentiment_analysis(text: str):
         }
     }
 
+def compute_confidence(text: str, overall_sentiment: dict):
+    length = len(text)
+    magnitude = abs(overall_sentiment.get("compound", 0.0))
+    pos = overall_sentiment.get("pos", 0.0)
+    neg = overall_sentiment.get("neg", 0.0)
+    balance_gap = abs(pos - neg)
+
+    if length < 200 or magnitude < 0.15 or balance_gap < 0.1:
+        return "low"
+    if length < 500 or magnitude < 0.35:
+        return "medium"
+    return "high"
+
+def is_school_related(text: str) -> bool:
+    if not text:
+        return False
+    keywords = [
+        "campus", "class", "classes", "prof", "professor", "lecturer", "org",
+        "organization", "clubs", "dorm", "housing", "residence", "tuition",
+        "scholarship", "cafeteria", "canteen", "library", "facilities",
+        "student", "students", "workload", "social", "nightlife", "friend",
+        "friends", "major", "course", "school", "university"
+    ]
+    lower = text.lower()
+    return any(k in lower for k in keywords)
+
+def normalize_cache_key(school_name: str, topic: Optional[str], freshness_days: Optional[int], question: str):
+    normalized_question = re.sub(r"\s+", " ", (question or "").strip().lower())
+    topic_part = (topic or "").strip().lower()
+    freshness_part = str(freshness_days or 0)
+    return f"{school_name.lower()}||{topic_part}||{freshness_part}||{normalized_question}"
+
+def get_cached_summary(cache_key: str):
+    cached = SUMMARY_CACHE.get(cache_key)
+    if not cached:
+        return None
+    if (cached["ts"] + CACHE_TTL_SECONDS) < time.time():
+        SUMMARY_CACHE.pop(cache_key, None)
+        return None
+    return cached["value"]
+
+def set_cached_summary(cache_key: str, value: dict):
+    SUMMARY_CACHE[cache_key] = {"ts": time.time(), "value": value}
+
 def fallback_response_with_analysis(school_name: str, question: str, note: Optional[str] = None):
     reply_text = (
         f"Here's some sample feedback for **{school_name}** regarding \"{question}\":\n\n"
@@ -169,55 +218,7 @@ def fallback_response_with_analysis(school_name: str, question: str, note: Optio
         "analysis": analysis
     }
 
-def search_reddit(school_name: str, query: str, limit: int = 5) -> List[str]:
-    client_id = os.getenv("REDDIT_CLIENT_ID")
-    client_secret = os.getenv("REDDIT_CLIENT_SECRET")
-    user_agent = os.getenv("REDDIT_USER_AGENT")
-
-    if not all([client_id, client_secret, user_agent]):
-        print("[search_reddit] Missing Reddit API credentials. Set REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, and REDDIT_USER_AGENT in .env.local")
-        return ["__REDDIT_MISSING_CREDS__"]
-
-    try:
-        reddit = praw.Reddit(
-            client_id=client_id,
-            client_secret=client_secret,
-            user_agent=user_agent,
-            read_only=True
-        )
-
-        # Simple subreddit mapping for better targeting
-        subreddit_map = {
-            "University of Santo Tomas": "Tomasino",
-            "University of the Philippines": "peyups",
-            "Ateneo de Manila University": "ADMU"
-        }
-        subreddit_name = subreddit_map.get(school_name, school_name.replace(" ", ""))
-        subreddit = reddit.subreddit(subreddit_name)
-
-        comments = []
-        # Search for submissions related to the query
-        for submission in subreddit.search(query, limit=5, sort="relevance"):
-            # Fetch top-level comments, avoiding "MoreComments" objects
-            submission.comments.replace_more(limit=0)
-            for comment in submission.comments.list():
-                if len(comments) >= limit:
-                    break
-                # Add comments that are not too short
-                if len(comment.body) > 50:
-                    comments.append(comment.body)
-            if len(comments) >= limit:
-                break
-
-        if not comments:
-            return [f"No relevant Reddit comments found on r/{subreddit_name} for '{query}'. Try a different topic."]
-
-        return comments
-    except Exception as e:
-        print(f"[search_reddit] Error fetching from Reddit: {e}")
-        return [f"An error occurred while trying to fetch data from Reddit. The subreddit r/{subreddit_name} may not exist or there could be an API issue."]
-
-def generate_with_openrouter(school_name: str, question: str) -> Optional[str]:
+def generate_with_openrouter(school_name: str, question: str, topic: Optional[str] = None, freshness_days: Optional[int] = None) -> Optional[str]:
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         return None
@@ -226,11 +227,14 @@ def generate_with_openrouter(school_name: str, question: str) -> Optional[str]:
     site_url = os.getenv("OPENROUTER_SITE_URL", "http://localhost:3000")
     app_name = os.getenv("OPENROUTER_APP_NAME", "Universentiment")
 
+    topic_line = f"Topic: {topic}\n" if topic else ""
+    timeframe_line = f"Timeframe: last {freshness_days} days\n" if freshness_days else ""
     prompt = (
         "You are an assistant helping students understand campus life sentiment. "
         "Respond with 3-5 short quotes (bullet points) that could plausibly represent student opinions, "
         "but clearly avoid claiming they are from real people. Keep it concise and helpful.\n\n"
         f"School: {school_name}\n"
+        f"{topic_line}{timeframe_line}"
         f"Question: {question}\n"
     )
 
@@ -271,19 +275,70 @@ async def chat(body: ChatRequestBody):
     try:
         school_name = body.school.name
         question = get_last_user_text(body.messages)
+        topic = body.topic
+        freshness_days = body.freshness_days
+
+        if (not question or not question.strip()) and topic:
+            question = f"{topic}"
+
+        if not topic and not is_school_related(question):
+            return JSONResponse(content={
+                "reply": "That doesn’t look school-life related. Ask about campus life, orgs, workload, dorms, or social life.",
+                "meta": {"mode": "guardrail", "guardrail": True},
+                "analysis": None,
+                "confidence": "low"
+            })
+
+        cache_key = normalize_cache_key(school_name, topic, freshness_days, question)
+        cached = get_cached_summary(cache_key)
+        if cached:
+            cached["meta"]["cache_hit"] = True
+            return JSONResponse(content=cached)
 
         # Use OpenRouter only (no Reddit)
-        ai_reply = generate_with_openrouter(school_name, question)
+        ai_reply = generate_with_openrouter(school_name, question, topic=topic, freshness_days=freshness_days)
         if ai_reply:
             analysis = perform_sentiment_analysis(ai_reply)
-            return JSONResponse(content={
+            confidence = compute_confidence(ai_reply, analysis["overall_sentiment"])
+            payload = {
                 "reply": ai_reply,
-                "meta": {"mode": "openrouter", "model": os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")},
-                "analysis": analysis
+                "meta": {
+                    "mode": "openrouter",
+                    "model": os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
+                    "cache_hit": False,
+                    "topic": topic,
+                    "freshness_days": freshness_days,
+                    "prompt": question,
+                    "source_note": None
+                },
+                "analysis": analysis,
+                "confidence": confidence
+            }
+            set_cached_summary(cache_key, payload)
+            return JSONResponse(content={
+                **payload
             })
 
         note = "OpenRouter not configured or failed."
-        return JSONResponse(content=fallback_response_with_analysis(school_name, question, note=note))
+        fallback = fallback_response_with_analysis(school_name, question, note=note)
+        fallback_analysis = fallback.get("analysis") or {}
+        overall = fallback_analysis.get("overall_sentiment") or {}
+        confidence = compute_confidence(fallback.get("reply", ""), overall) if overall else "low"
+        payload = {
+            "reply": fallback.get("reply"),
+            "meta": {
+                **(fallback.get("meta") or {}),
+                "cache_hit": False,
+                "topic": topic,
+                "freshness_days": freshness_days,
+                "prompt": question,
+                "source_note": None
+            },
+            "analysis": fallback.get("analysis"),
+            "confidence": confidence
+        }
+        set_cached_summary(cache_key, payload)
+        return JSONResponse(content=payload)
 
     except Exception as e:
         print(f"[/api/chat] UNHANDLED EXCEPTION: {e}")
