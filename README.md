@@ -1,36 +1,46 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Universentiment
 
-## Getting Started
+Universentiment is a sentiment-analysis AI chatbot that lets prospective students ask about campus life across Philippine universities. The web UI gathers a user question, forwards it to the FastAPI sentiment microservice, and returns both a human-readable answer and a structured sentiment breakdown so visitors can quickly understand how students feel about workload, dorms, clubs, safety, and other school-life topics.
 
-First, run the development server:
+## What it does
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+- Chats about campus culture, resources, and student experiences in the Philippines by prompting a safe OpenRouter (GPT-4o-mini) assistant.
+- Runs every reply through an automated sentiment analysis pipeline (VADER + NLTK sentence tokenizer) to expose overall tone, sentence-level labels, and the most positive/negative excerpts.
+- Falls back to canned guidance when the AI endpoint is unreachable while still giving a sentiment digest and confidence indicator.
+- Caches recent question/school combinations (900-second TTL) so repeat inquiries return nearly instant responses and metadata about the source, overview, and TL;DR.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Tech stack
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- **Front-end:** Next.js 16.1 with the App Router, React 19.2, and Tailwind CSS 4 via PostCSS + [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) for the Geist-inspired typography.
+- **Back-end:** FastAPI served with Uvicorn, using Python 3.x foundations plus `requests`, `pydantic`, `python-dotenv`, and `fastapi.responses.JSONResponse` to power `/api/chat`.
+- **Sentiment analysis:** NLTK sentence tokenization and the VADER lexicon (`vaderSentiment`) translate chatbot text into compound/pos/neu/neg scores, plus helpers that compute a confidence level and extract overview/TL;DR snippets.
+- **AI integration:** OpenRouter (default `openai/gpt-4o-mini`) generates opinion-style replies that are curated to avoid claiming real sources; the backend honors `OPENROUTER_API_KEY`, `OPENROUTER_SITE_URL`, and `OPENROUTER_MODEL` environment variables.
+- **Dev tooling:** ESLint 9 family, TypeScript 5, and npm scripts for `dev`, `build`, `start`, and `lint`.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Getting started
 
-## Learn More
+1. Install dependencies:
+   ```bash
+   npm install
+   pip install -r backend/requirements.txt
+   ```
+2. Populate `.env.local` (or system env vars) with:
+   ```
+   OPENROUTER_API_KEY=your-key
+   OPENROUTER_SITE_URL=http://localhost:3000
+   OPENROUTER_APP_NAME=Universentiment
+   OPENROUTER_MODEL=openai/gpt-4o-mini
+   ```
+3. Run the backend (FastAPI/UVicorn):
+   ```bash
+   uvicorn backend.main:app --reload --port 8000
+   ```
+4. Start the Next.js app:
+   ```bash
+   npm run dev
+   ```
+   The front end proxies `/api/chat` to the FastAPI server by default.
 
-To learn more about Next.js, take a look at the following resources:
+## Deploying
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Host the Next.js site on Vercel (or any static+node host) and keep the FastAPI service running on a dedicated compute pair. Ensure the production `.env` provides a working OpenRouter key plus the same cache-friendly settings so chatbot responses stay fast and traceable.
